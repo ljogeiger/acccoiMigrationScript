@@ -18,37 +18,52 @@ LOAD_FILENAME_WITH_FILEPATH = "masterFiles.txt"
 URL_FINAL_FILE = "endURL_file.txt"
 ERROR_FILE = "groupingErrors.xlsx"
 
-# Gets all files in a given directory and sorts them alphabetically (IMPORTANT)
-def getFilePathsUnix():
-    os.system('find ~/Desktop/acccoi/SCOAP_Master/* -type f -print | sort -V > {}'.format(LOAD_FILENAME_WITH_FILEPATH))
 
-# Gets file paths from argument given
-def getFilePaths(): 
-    args = sys.argv[1:]
-    list_files = [] 
+"""
 
-    for filename in args:
-        printFileName(filename)
-        list_files.append(filename)
+    Create File Urls
 
-    return list_files
+"""
+
 
 # Function to make urls according to DropBox guidelines. 
 def make():
-    base_url = "https://www.dropbox.com/home"
-    
-    file_list = []
-    end_url_phases_dict = defaultdict(list)
-    end_url_workflow_dict = defaultdict(list)
 
-    f_in = open(LOAD_FILENAME_WITH_FILEPATH,"r")
     f_out = open(URL_FINAL_FILE,"w+")
+
+    file_list = readFilenameWithFilepath()
+
+    # Create dictionaries with Phases urls and Workflow urls 
+    end_url_phases_dict, end_url_workflow_dict = createWorkflowPhasesDict(file_list)
+        
+    # If url is valid then take from respecive dictionary, add href strings, 
+    # conduct error checks, and write grouping to f_out.
+    writeGroupings(end_url_phases_dict, end_url_workflow_dict, f_out)
+
+    # Additional step which converts filenames to URLs, used for error correction
+    createErrorUrls(end_url_workflow_dict, end_url_phases_dict)
+
+    f_out.close()
+
+def readFilenameWithFilepath():
+    file_list = []
+    f_in = open(LOAD_FILENAME_WITH_FILEPATH,"r")
 
     # Add file from f_in to list without newline character
     for line in f_in:
         file_list.append(line[:len(line)-1])
 
-    # Create dictionaries with Phases urls and Workflow urls 
+    f_in.close()
+
+    return file_list
+
+
+def createWorkflowPhasesDict(file_list):
+    base_url = "https://www.dropbox.com/home"
+
+    end_url_phases_dict = defaultdict(list)
+    end_url_workflow_dict = defaultdict(list)
+
     for filename in file_list: 
         path_to_file_list = [] 
         doc_name = filename.split("/")[-1]
@@ -69,9 +84,10 @@ def make():
             end_url_phases_dict[doc_name_wo_filetype].append(end_URL)
         elif first_directory_type == 'Workflow':
             end_url_workflow_dict[doc_name_wo_filetype].append(end_URL)
-        
-    # If url is valid then take from respecive dictionary, add href strings, 
-    # conduct error checks, and write grouping to f_out.
+
+    return end_url_phases_dict, end_url_workflow_dict
+
+def writeGroupings(end_url_phases_dict, end_url_workflow_dict, fileToWrite):
     if validate_url(end_url_phases_dict) and validate_url(end_url_workflow_dict):
 
         validLetters = "ChecklistTemplate123456"
@@ -83,7 +99,7 @@ def make():
                     url.replace("\n","").replace("/xa0"," ")+"\">"+
                     "".join([char for char in file_type if char in validLetters]).replace("Checkliste", "Checklist")+
                     "</a> for this task here. ")
-            f_out.write(final_string+"\n")
+            fileToWrite.write(final_string+"\n")
 
         for key in end_url_workflow_dict.keys():
             final_string=""
@@ -93,12 +109,8 @@ def make():
                     url.replace("\n","").replace("/xa0"," ")+"\">"+
                     "".join([char for char in file_type if char in validLetters]).replace("Checkliste", "Checklist")+
                     "</a> for this task here. ")
-            f_out.write(final_string+"\n")
+            fileToWrite.write(final_string+"\n")
 
-    #createErrorUrls(end_url_workflow_dict, end_url_phases_dict) # Additional step which converts filenames to URLs, used for error correction
-
-    f_out.close()
-    f_in.close()
 
 # Validate urls with URLValidator(). Can also check if url exists but that takes more time. 
 def validate_url(input_dict):
@@ -133,22 +145,71 @@ def getPaths():
     f_in.close()
     return path_to_file_list, filename_list
 
+# Gets all files in a given directory and sorts them alphabetically (IMPORTANT)
+def getFilePathsUnix():
+    os.system('find ~/Desktop/acccoi/SCOAP_Master/* -type f -print | sort -V > {}'.format(LOAD_FILENAME_WITH_FILEPATH))
+
+# Gets file paths from argument given
+def getFilePaths(): 
+    args = sys.argv[1:]
+    list_files = [] 
+
+    for filename in args:
+        list_files.append(filename)
+
+    return list_files
+
+
+"""
+
+    Create Excel Document 
+
+"""
+
+
+
 # Instert links into excel file according to the correct cell. 
-def insertLinks(path_list, file_list): 
-    title_list = []
+def insertLinks(): 
     similarity_index = []
     bad_matches = defaultdict(list)
-    file_hash_table_phases = {}
-    file_hash_table_workflow = {}
 
     workbook = load_workbook(WORKBOOK)
-    # check_workbook = load_workbook("QualityCheckWrike.xlsx")
-    # check_worksheet = check_workbook.active
     worksheet = workbook.active
     f_in = open(URL_FINAL_FILE,"r")
     # f_error = open("groupingErrors.txt", "w+")
 
+    path_list, file_list = getPaths()
+
     # Create hash table with filename as key and url groupings as values retaining information for phases and workflow sorting
+    file_hash_table_phases, file_hash_table_workflow = createTable(f_in, file_list)
+
+    # Get titles from Excel Column D
+    title_list = getTitles(worksheet)
+
+    # If path cell - instert nothing. If find exact match btw title and filename - insert url(s). 
+    # If find nothing then compare similarity matrix - insert url(s) of max similarity.
+    writeToExcel(worksheet, title_list, file_hash_table_phases, bad_matches, similarity_index, 1, 625)
+    writeToExcel(worksheet, title_list, file_hash_table_workflow, bad_matches, similarity_index, 626, 1414)
+
+
+    print("\nAverage similarity index: "+str(mean(similarity_index)))
+    print("\nLowest similarity index: "+str(min(similarity_index)))
+    print("\nMaximum similarity index: "+str(max(similarity_index)))
+    print(bad_matches, len(bad_matches))
+    # for key in bad_matches.keys():
+    #     f_error.write(str(key)+" -> "+str(bad_matches[key])+"\n")
+
+    # adjustForErrors(bad_matches.keys(), worksheet)
+
+    workbook.save(WORKBOOK)
+    f_in.close()
+    # f_error.close()
+
+# Create hash table with filename as key and url groupings as values retaining information for phases and workflow sorting
+def createTable(f_in, file_list):
+    file_hash_table_phases = {}
+    file_hash_table_workflow = {}
+
     count=0
     for line in f_in:
         if "/Phases/" in line: 
@@ -156,8 +217,32 @@ def insertLinks(path_list, file_list):
         elif "/Workflow/" in line:
             file_hash_table_workflow[" ".join(file_list[count].split("_")[1:])] = line[0:-1]
         count+=1
+    return file_hash_table_phases, file_hash_table_workflow
 
-    # Get titles from Excel Column D
+# If path cell - instert nothing. If find exact match btw title and filename - insert url(s). 
+# If find nothing then compare similarity matrix - insert url(s) of max similarity.
+def writeToExcel(worksheet, title_list, file_hash_table, bad_matches, similarity_index, start, end):
+    for j in range(start,end):
+        print("\n"+title_list[j])
+        print("----------------------------------------------------------------------")
+        if "/Phases" in title_list[j] or "/Workstreams" in title_list[j]:
+            print(str(title_list[j])+" -> [TITLE]") 
+            worksheet.cell(row=j+1, column=18).value = ""
+            continue
+        elif title_list[j] in file_hash_table:
+            print(str(title_list[j])+" == "+str(file_hash_table[title_list[j]]))
+            worksheet.cell(row=j+1, column=18).value = file_hash_table[title_list[j]]
+        else:
+            similarity, key = findMaxComp(title_list[j], file_hash_table)
+            print("Similarity Index: "+str(similarity)+" \n"+str(title_list[j])+" == "+file_hash_table[key])
+            similarity_index.append(similarity)
+            worksheet.cell(row=j+1, column=18).value = file_hash_table[key]
+            if similarity <= .85:
+                bad_matches[title_list[j]].append(key)
+
+# Get titles from Excel Column D
+def getTitles(worksheet):
+    title_list = []
     for i in range(1,1415):
         directory = worksheet.cell(row=i, column=2).value
         prefix = ""
@@ -171,83 +256,19 @@ def insertLinks(path_list, file_list):
         indv_cell = worksheet.cell(row=i, column=4).value
         title_list.append(prefix+indv_cell.replace("\xa0"," "))
 
-    # If path cell - instert nothing. If find exact match btw title and filename - insert url(s). 
-    # If find nothing then compare similarity matrix - insert url(s) of max similarity.
-    for j in range(1,625):
-        print("\n"+title_list[j])
-        print("----------------------------------------------------------------------")
-        if "/Phases" in title_list[j] or "/Workstreams" in title_list[j]:
-            print(str(title_list[j])+" -> [TITLE]") 
-            worksheet.cell(row=j+1, column=18).value = ""
-            # check_worksheet.cell(row=j+1, column=1).value = title_list[j]
-            continue
-        elif title_list[j] in file_hash_table_phases:
-            print(str(title_list[j])+" == "+str(file_hash_table_phases[title_list[j]]))
-            worksheet.cell(row=j+1, column=18).value = file_hash_table_phases[title_list[j]]
-            # check_worksheet.cell(row=j+1, column=1).value = title_list[j]
-            # check_worksheet.cell(row=j+1, column=2).value = title_list[j]
-        else:
-            similarity, key = findMaxComp(title_list[j], file_hash_table_phases)
-            print("Similarity Index: "+str(similarity)+" \n"+str(title_list[j])+" == "+file_hash_table_phases[key])
-            similarity_index.append(similarity)
-            worksheet.cell(row=j+1, column=18).value = file_hash_table_phases[key]
-            # check_worksheet.cell(row=j+1, column=1).value = title_list[j]
-            # check_worksheet.cell(row=j+1, column=2).value = key
-            if similarity <= .85:
-                bad_matches[title_list[j]].append(key)
-
-    for j in range(626,1414):
-        print("\n"+title_list[j])
-        print("----------------------------------------------------------------------")
-        if "/Phases" in title_list[j] or "/Workstreams" in title_list[j]:
-            print(str(title_list[j])+" -> [TITLE]") 
-            worksheet.cell(row=j+1, column=18).value = ""
-            # check_worksheet.cell(row=j+1, column=1).value = title_list[j]
-            continue
-        elif title_list[j] in file_hash_table_workflow:
-            print(str(title_list[j])+" == "+str(file_hash_table_workflow[title_list[j]]))
-            worksheet.cell(row=j+1, column=18).value = file_hash_table_workflow[title_list[j]]
-            # check_worksheet.cell(row=j+1, column=1).value = title_list[j]
-            # check_worksheet.cell(row=j+1, column=2).value = title_list[j]
-        else:
-            similarity, key = findMaxComp(title_list[j], file_hash_table_workflow)
-            print("Similarity Index: "+str(similarity)+" \n"+str(title_list[j])+" == "+file_hash_table_workflow[key])
-            similarity_index.append(similarity)
-            worksheet.cell(row=j+1, column=18).value = file_hash_table_workflow[key]
-            # check_worksheet.cell(row=j+1, column=1).value = title_list[j]
-            # check_worksheet.cell(row=j+1, column=2).value = key
-            if similarity <= .85:
-                bad_matches[title_list[j]].append(key)
-
-
-    print("\nAverage similarity index: "+str(mean(similarity_index)))
-    print("\nLowest similarity index: "+str(min(similarity_index)))
-    print("\nMaximum similarity index: "+str(max(similarity_index)))
-    print(bad_matches, len(bad_matches))
-    # for key in bad_matches.keys():
-    #     f_error.write(str(key)+" -> "+str(bad_matches[key])+"\n")
-
-    #createErrorExcel(bad_matches)
-    # adjustForErrors(bad_matches.keys(), worksheet)
-
-    workbook.save(WORKBOOK)
-    # check_workbook.save("QualityCheckWrike.xlsx")
-    f_in.close()
-    # f_error.close()
-
-    return
+    return title_list
 
 def createErrorUrls(workflow_dict, phases_dict):
     workbook = load_workbook(ERROR_FILE)
     worksheet = workbook.active
 
     validLetters = "ChecklistTemplate123456"
-    for row in range(3, 34): #length of worksheet
-        if worksheet.cell(row=row, column=2).value == "no" or worksheet.cell(row=row, column=2).value == "nothing":
+    for row in range(103, 170): #length of worksheet
+        if worksheet.cell(row=row, column=3).value == "no" or worksheet.cell(row=row, column=3).value == "nothing":
             continue
         else:
             final_string=""
-            key = " ".join(str(worksheet.cell(row=row, column=2).value).split("_")[0:-1])
+            key = " ".join(str(worksheet.cell(row=row, column=3).value).split("_")[0:-1])
             if key in phases_dict.keys():
                 for url in phases_dict[key]:
                     file_type = url.split('/')[-1].split('_')[-1][:-5]
@@ -256,26 +277,7 @@ def createErrorUrls(workflow_dict, phases_dict):
                         "".join([char for char in file_type if char in validLetters]).replace("Checkliste", "Checklist")+
                         "</a> for this task here. ")
 
-            worksheet.cell(row=row, column=2).value = final_string
-            print("Corrected: "+key+" -> "+final_string)
-
-
-    for row in range(34,35):
-        if worksheet.cell(row=row, column=2).value == "no" or worksheet.cell(row=row, column=2).value == "nothing":
-            continue
-        else:
-            final_string=""
-            key = " ".join(str(worksheet.cell(row=row, column=2).value).split("_")[0:-1])
-            if key in workflow_dict.keys():
-                for url in workflow_dict[key]:
-                    file_type = url.split('/')[-1].split('_')[-1][:-5]
-                    final_string += ("Please access the <a href=\""+
-                        url.replace("\n","").replace("/xa0"," ")+"\">"+
-                        "".join([char for char in file_type if char in validLetters]).replace("Checkliste", "Checklist")+
-                        "</a> for this task here. ")
-
-
-            worksheet.cell(row=row, column=2).value = final_string
+            worksheet.cell(row=row, column=3).value = final_string
             print("Corrected: "+key+" -> "+final_string)
 
     workbook.save(ERROR_FILE)
@@ -295,10 +297,15 @@ def createErrorExcel(error_dict):
 
     workbook.save(ERROR_FILE)
 
+"""
+
+Similarity Tests:
+
+    Adjusted for accuracy not speed
+
+"""
 
 # Returns: similarity ratio between two strings
-# def similar(a,b):
-#     return Levenshtein.ratio(a, b)
 def similar(a, b):
     return distance.get_jaro_distance(a, b, winkler=False, scaling=0.1)
 
@@ -318,12 +325,12 @@ def findMaxComp(title, hash_table):
     return max_ratio, final_key
 
 
+
+
 if __name__ == '__main__':
     
     #getFilePathsUnix()
-    make()
-
-    #path_list, file_list = getPaths()
-    #insertLinks(path_list, file_list)
+    #make()
+    insertLinks()
     #os.system("open {}".format(WORKBOOK))
 
